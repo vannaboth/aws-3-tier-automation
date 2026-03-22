@@ -94,10 +94,12 @@ resource "aws_route_table_association" "database" {
 data "aws_caller_identity" "current" {}
 
 resource "aws_s3_bucket" "lb_logs" {
-  bucket        = "${var.environment}-nlb-logs-${data.aws_caller_identity.current.account_id}"
+  bucket        = "${var.environment}-alb-logs-${data.aws_caller_identity.current.account_id}"
   force_destroy = true
-  tags          = { Name = "${var.environment}-nlb-logs", Environment = var.environment }
+  tags          = { Name = "${var.environment}-alb-logs", Environment = var.environment }
 }
+
+data "aws_elb_service_account" "main" {}
 
 resource "aws_s3_bucket_policy" "lb_logs" {
   bucket = aws_s3_bucket.lb_logs.id
@@ -106,9 +108,15 @@ resource "aws_s3_bucket_policy" "lb_logs" {
     Statement = [
       {
         Effect    = "Allow"
+        Principal = { AWS = data.aws_elb_service_account.main.arn }
+        Action    = "s3:PutObject"
+        Resource  = "${aws_s3_bucket.lb_logs.arn}/${var.environment}-alb/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
+      },
+      {
+        Effect    = "Allow"
         Principal = { Service = "delivery.logs.amazonaws.com" }
         Action    = "s3:PutObject"
-        Resource  = "${aws_s3_bucket.lb_logs.arn}/${var.environment}-nlb/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
+        Resource  = "${aws_s3_bucket.lb_logs.arn}/${var.environment}-alb/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
         Condition = {
           StringEquals = { "s3:x-amz-acl" = "bucket-owner-full-control" }
         }
@@ -133,62 +141,79 @@ resource "aws_s3_bucket_lifecycle_configuration" "lb_logs" {
   }
 }
 
-resource "aws_eip" "nlb" {
-  count  = length(var.public_subnets)
-  domain = "vpc"
-  tags   = { Name = "${var.environment}-nlb-eip-${count.index + 1}", Environment = var.environment }
+# ALB security group — allows HTTP from internet
+resource "aws_security_group" "alb" {
+  name   = "${var.environment}-alb-sg"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    description = "HTTP from internet"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTPS from internet"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "${var.environment}-alb-sg", Environment = var.environment }
 }
 
-resource "aws_lb" "network" {
-  name                             = "${var.environment}-nlb"
-  internal                         = false
-  load_balancer_type               = "network"
-  enable_deletion_protection       = var.environment == "prod" ? true : false
-  enable_cross_zone_load_balancing = true
-
-  subnet_mapping {
-    subnet_id     = aws_subnet.public[0].id
-    allocation_id = aws_eip.nlb[0].id
-  }
-
-  subnet_mapping {
-    subnet_id     = aws_subnet.public[1].id
-    allocation_id = aws_eip.nlb[1].id
-  }
+resource "aws_lb" "application" {
+  name                       = "${var.environment}-alb"
+  internal                   = false
+  load_balancer_type         = "application"
+  security_groups            = [aws_security_group.alb.id]
+  subnets                    = aws_subnet.public[*].id
+  enable_deletion_protection = var.environment == "prod" ? true : false
 
   access_logs {
     bucket  = aws_s3_bucket.lb_logs.id
-    prefix  = "${var.environment}-nlb"
+    prefix  = "${var.environment}-alb"
     enabled = true
   }
 
-  depends_on = [
-    aws_s3_bucket_policy.lb_logs,
-    aws_eip.nlb,         
-    aws_subnet.public
-  ]
-
-  tags = { Name = "${var.environment}-nlb", Environment = var.environment }
+  depends_on = [aws_s3_bucket_policy.lb_logs]
+  tags = { Name = "${var.environment}-alb", Environment = var.environment }
 }
 
 resource "aws_lb_target_group" "app" {
   name     = "${var.environment}-app-tg"
   port     = 80
-  protocol = "TCP"
+  protocol = "HTTP"
   vpc_id   = aws_vpc.main.id
 
   health_check {
-    protocol            = "TCP"
+    path                = "/"
+    protocol            = "HTTP"
     healthy_threshold   = 2
-    unhealthy_threshold = 2
+    unhealthy_threshold = 3
     interval            = 30
+    timeout             = 5
+    matcher             = "200"
   }
+
+  tags = { Name = "${var.environment}-app-tg", Environment = var.environment }
 }
 
-resource "aws_lb_listener" "tcp" {
-  load_balancer_arn = aws_lb.network.arn
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.application.arn
   port              = 80
-  protocol          = "TCP"
+  protocol          = "HTTP"
+
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.app.arn

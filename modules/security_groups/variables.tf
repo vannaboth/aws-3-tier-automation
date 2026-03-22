@@ -10,6 +10,7 @@ variable "vpc_id" {
   type = string
 }
 
-variable "vpc_cidr" {
-  type = string
+variable "alb_sg_id" {
+  description = "ALB security group ID to allow traffic into private instances"
+  type        = string
 }

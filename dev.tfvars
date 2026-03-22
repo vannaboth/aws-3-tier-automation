@@ -11,6 +11,6 @@ max_size           = 4
 desired_capacity   = 2
 db_instance_class  = "db.t3.micro"
 db_name            = "appdb"
-db_username       = "admin"
-db_password       = "Passw0rd123"
+db_username        = "admin"
+db_password        = "Passw0rd123"
 

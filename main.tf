@@ -29,7 +29,7 @@ module "security_groups" {
   source      = "./modules/security_groups"
   environment = var.environment
   vpc_id      = module.vpc.vpc_id
-  vpc_cidr    = var.vpc_cidr
+  alb_sg_id   = module.vpc.alb_sg_id
 }
 
 module "ec2_instances" {

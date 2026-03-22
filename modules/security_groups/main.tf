@@ -33,19 +33,11 @@ resource "aws_security_group" "private" {
   vpc_id = var.vpc_id
 
   ingress {
-    description = "HTTP from NLB via VPC CIDR"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
-  }
-
-  ingress {
-    description     = "All traffic from public SG"
-    from_port       = 0
-    to_port         = 0
-    protocol        = "-1"
-    security_groups = [aws_security_group.public.id]
+    description     = "HTTP from ALB only"
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    security_groups = [var.alb_sg_id]
   }
 
   egress {
